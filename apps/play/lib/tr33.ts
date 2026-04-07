@@ -2,7 +2,8 @@ import { createClient as libsqlCreateClient } from "@libsql/client";
 import { createClient, defineConfig, z } from "tr33";
 
 const libsqlClient = libsqlCreateClient({
-  url: "file:./tr33.db",
+  url: process.env.TURSO_DATABASE_URL || 'file:./tr33.db',
+  authToken: process.env.TURSO_AUTH_TOKEN || ''
 });
 
 const authors = z.collection({
