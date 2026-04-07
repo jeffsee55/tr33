@@ -1,0 +1,5 @@
+{
+  "name": "index",
+  "label": "Getting Started",
+  "children": ["../docs/intro.md", "../docs/guides.md", "../docs/api.md"]
+}

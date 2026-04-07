@@ -1,0 +1,286 @@
+{
+  "name": "tr33-vscode",
+  "description": "Tr33 for VS Code",
+  "version": "0.0.1",
+  "publisher": "jsee",
+  "license": "MIT",
+  "enabledApiProposals": [
+    "scmActionButton"
+  ],
+  "private": true,
+  "extensionKind": [
+    "web"
+  ],
+  "activationEvents": [
+    "*",
+    "onFileSystem:vscode-vfs"
+  ],
+  "capabilities": {
+    "virtualWorkspaces": true,
+    "untrustedWorkspaces": {
+      "supported": true
+    }
+  },
+  "engines": {
+    "vscode": "^1.72.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "type": "commonjs",
+  "files": [
+    "dist",
+    "themes",
+    "package.json",
+    "package.nls.json"
+  ],
+  "main": "./dist/extension.js",
+  "browser": "./dist/extension.js",
+  "types": "./dist/extension.d.ts",
+  "contributes": {
+    "configuration": {
+      "type": "object",
+      "title": "Tr33",
+      "properties": {
+        "tr33.repo": {
+          "type": "string",
+          "description": "GitHub owner/repo (e.g. \"acme/website\")."
+        },
+        "tr33.ref": {
+          "type": "string",
+          "default": "main",
+          "description": "Default git ref when no headRef is configured."
+        },
+        "tr33.headRef": {
+          "type": "string",
+          "description": "Active git ref for the editor (set via configurationDefaults)."
+        },
+        "tr33.baseRef": {
+          "type": "string",
+          "description": "Comparison base ref (e.g. \"main\")."
+        }
+      }
+    },
+    "themes": [
+      {
+        "label": "Tr33 Dark",
+        "uiTheme": "vs-dark",
+        "path": "./themes/tr33-dark.json"
+      }
+    ],
+    "viewsWelcome": [
+      {
+        "view": "debug",
+        "contents": "In order to run and debug you'll need to create a local workspace."
+      },
+      {
+        "view": "terminal",
+        "contents": "In order to run and debug you'll need to create a local workspace."
+      }
+    ],
+    "commands": [
+      {
+        "command": "tr33.switchBranch",
+        "title": "Switch branch",
+        "category": "Tr33"
+      },
+      {
+        "command": "tr33.source-control.commit",
+        "title": "Commit",
+        "category": "Tr33",
+        "icon": "$(check)"
+      },
+      {
+        "command": "tr33.source-control.commitAndPush",
+        "title": "Commit & Push",
+        "category": "Tr33",
+        "icon": "$(cloud-upload)"
+      },
+      {
+        "command": "tr33.source-control.commitAndSyncWithPull",
+        "title": "Commit & Sync (pull first)",
+        "category": "Tr33",
+        "icon": "$(sync)"
+      },
+      {
+        "command": "tr33.source-control.commitAndMerge",
+        "title": "Commit & Merge",
+        "category": "Tr33",
+        "icon": "$(git-merge)"
+      },
+      {
+        "command": "tr33.source-control.main.commitAndMerge",
+        "title": "Create PR & Merge (Main Compare)",
+        "category": "Tr33",
+        "icon": "$(git-pull-request-create)"
+      },
+      {
+        "command": "tr33.source-control.main.commitAndCreatePr",
+        "title": "Create PR (Main Compare)",
+        "category": "Tr33",
+        "icon": "$(git-pull-request-create)"
+      },
+      {
+        "command": "tr33.source-control.main.commit",
+        "title": "Commit (Main Compare)",
+        "category": "Tr33",
+        "icon": "$(check)"
+      },
+      {
+        "command": "tr33.source-control.main.viewPr",
+        "title": "View PR (Main Compare)",
+        "category": "Tr33",
+        "icon": "$(link-external)"
+      },
+      {
+        "command": "tr33.source-control.main.pullFromRemote",
+        "title": "Pull from remote",
+        "category": "Tr33",
+        "icon": "$(git-pull)"
+      },
+      {
+        "command": "tr33.source-control.discard",
+        "title": "Discard All Changes",
+        "category": "Tr33",
+        "icon": "$(trash)"
+      },
+      {
+        "command": "tr33.source-control.refresh",
+        "title": "Refresh",
+        "category": "Tr33",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "tr33.source-control.skipCommitAndSync",
+        "title": "Skip commit and sync",
+        "category": "Tr33"
+      },
+      {
+        "command": "tr33.source-control.syncToConfigRef",
+        "title": "Sync to config ref (merge / create PR)",
+        "category": "Tr33"
+      },
+      {
+        "command": "tr33.openOnGitHub",
+        "title": "Open on GitHub",
+        "category": "Tr33",
+        "icon": "$(link-external)"
+      },
+      {
+        "command": "tr33.openPullRequests",
+        "title": "Open Pull Requests",
+        "category": "Tr33",
+        "icon": "$(git-pull-request)"
+      },
+      {
+        "command": "tr33.openIssues",
+        "title": "Open Issues",
+        "category": "Tr33",
+        "icon": "$(issues)"
+      },
+      {
+        "command": "tr33.openBranchOnGitHub",
+        "title": "Open branch on GitHub",
+        "category": "Tr33",
+        "icon": "$(link-external)"
+      },
+      {
+        "command": "tr33.closeEmbeddedEditor",
+        "title": "Close embedded editor",
+        "category": "Tr33",
+        "icon": "$(close)"
+      }
+    ],
+    "customEditors": [
+      {
+        "viewType": "tr33.imagePreview",
+        "displayName": "Tr33 Image Preview",
+        "selector": [
+          {
+            "filenamePattern": "*.png"
+          },
+          {
+            "filenamePattern": "*.jpg"
+          },
+          {
+            "filenamePattern": "*.jpeg"
+          },
+          {
+            "filenamePattern": "*.gif"
+          },
+          {
+            "filenamePattern": "*.webp"
+          },
+          {
+            "filenamePattern": "*.svg"
+          },
+          {
+            "filenamePattern": "*.bmp"
+          },
+          {
+            "filenamePattern": "*.ico"
+          }
+        ],
+        "priority": "default"
+      }
+    ],
+    "menus": {
+      "editor/title": [
+        {
+          "command": "tr33.closeEmbeddedEditor",
+          "group": "navigation@100",
+          "when": "activeEditor && resourceScheme == vscode-vfs"
+        }
+      ],
+      "scm/title": [
+        {
+          "command": "tr33.source-control.discard",
+          "group": "navigation@1",
+          "when": "scmProvider == tr33-scm"
+        },
+        {
+          "command": "tr33.source-control.refresh",
+          "group": "navigation@2",
+          "when": "scmProvider == tr33-scm"
+        },
+        {
+          "command": "tr33.openOnGitHub",
+          "group": "navigation@3",
+          "when": "scmProvider == tr33-scm"
+        },
+        {
+          "command": "tr33.openPullRequests",
+          "group": "navigation@4",
+          "when": "scmProvider == tr33-scm"
+        },
+        {
+          "command": "tr33.openIssues",
+          "group": "navigation@5",
+          "when": "scmProvider == tr33-scm"
+        }
+      ],
+      "scm/resourceGroup/context": [
+        {
+          "command": "tr33.source-control.discard",
+          "group": "inline@1",
+          "when": "scmProvider == tr33-scm && scmResourceGroup == changes"
+        }
+      ]
+    }
+  },
+  "dependencies": {
+    "tr33-store": "workspace:*",
+    "tsdown": "^0.15.4"
+  },
+  "scripts": {
+    "build": "tsdown",
+    "dev": "tsdown --watch",
+    "lib:dev": "tsdown --watch",
+    "watch:deps": "tsdown --watch"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.24",
+    "@types/vscode": "1.109.0",
+    "typescript": "5.5.4"
+  }
+}

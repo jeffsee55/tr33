@@ -1,0 +1,513 @@
+import { execSync } from "node:child_process";
+import { graphql } from "@octokit/graphql";
+import { Octokit } from "@octokit/rest";
+import {
+  type CreatePrArgs,
+  type MergePrArgs,
+  type MergePrResult,
+  type PrResult,
+  type PushResult,
+  Remote,
+  type UpdatePrArgs,
+} from "@/git/remote";
+import type { Commit } from "@/types";
+import { commitSchema } from "@/types";
+
+function getGitHubToken(): string {
+  if (process.env.GITHUB_TOKEN) {
+    return process.env.GITHUB_TOKEN;
+  }
+
+  try {
+    const token = execSync("gh auth token", {
+      encoding: "utf-8",
+      stdio: ["pipe", "pipe", "pipe"],
+    }).trim();
+
+    if (!token) {
+      throw new Error("gh auth token returned empty result");
+    }
+
+    return token;
+  } catch (error) {
+    throw new Error(
+      "Failed to get GitHub token. Either set GITHUB_TOKEN env var or authenticate with `gh auth login`.\n" +
+        `Original error: ${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
+}
+
+export class GitHubRemote extends Remote {
+  private octokit: Octokit;
+  private graphqlClient: typeof graphql;
+  private owner: string;
+  private repo: string;
+
+  constructor(...args: ConstructorParameters<typeof Remote>) {
+    const [baseArgs] = args;
+    super(baseArgs);
+    this.owner = this.config.org;
+    this.repo = this.config.repo;
+
+    const token = getGitHubToken();
+
+    this.octokit = new Octokit({ auth: token });
+    this.graphqlClient = graphql.defaults({
+      headers: {
+        authorization: `token ${token}`,
+      },
+    });
+  }
+
+  async listBranches(): Promise<string[]> {
+    const branches: string[] = [];
+    let page = 1;
+    while (true) {
+      const response = await this.octokit.repos.listBranches({
+        owner: this.owner,
+        repo: this.repo,
+        per_page: 100,
+        page,
+      });
+      for (const branch of response.data) {
+        branches.push(branch.name);
+      }
+      if (response.data.length < 100) break;
+      page++;
+    }
+    return branches;
+  }
+
+  async fetchCommit(args: { ref: string } | { oid: string }) {
+    const ref = "ref" in args ? args.ref : args.oid;
+
+    const query = `
+			query GetCommit($owner: String!, $repo: String!, $ref: String!) {
+				repository(owner: $owner, name: $repo) {
+					object(expression: $ref) {
+						... on Commit {
+							oid
+							message
+							author {
+								name
+								email
+								date
+							}
+							committer {
+								name
+								email
+								date
+							}
+							parents(first: 2) {
+								nodes {
+									oid
+								}
+							}
+							tree {
+								oid
+							}
+						}
+					}
+				}
+			}
+		`;
+
+    const result = await this.graphqlClient<{
+      repository: {
+        object: {
+          oid: string;
+          message: string;
+          author: { name: string; email: string; date: string };
+          committer: { name: string; email: string; date: string };
+          parents: { nodes: { oid: string }[] };
+          tree: { oid: string };
+        } | null;
+      };
+    }>(query, {
+      owner: this.owner,
+      repo: this.repo,
+      ref,
+    });
+
+    const commit = result.repository.object;
+    if (!commit) {
+      throw new Error(`Commit not found for ref: ${ref}`);
+    }
+
+    const parents = commit.parents.nodes;
+
+    return commitSchema.parse({
+      oid: commit.oid,
+      message: commit.message,
+      author: {
+        name: commit.author.name || "Unknown",
+        email: commit.author.email || "",
+        timestamp: Math.floor(new Date(commit.author.date).getTime() / 1000),
+        timezoneOffset: 0,
+      },
+      committer: {
+        name: commit.committer.name || "Unknown",
+        email: commit.committer.email || "",
+        timestamp: Math.floor(new Date(commit.committer.date).getTime() / 1000),
+        timezoneOffset: 0,
+      },
+      parent: parents[0]?.oid ?? null,
+      secondParent: parents[1]?.oid ?? null,
+      treeOid: commit.tree.oid,
+    });
+  }
+
+  async fetchTree({ oid }: { oid: string }) {
+    const query = `
+			query GetTree($owner: String!, $repo: String!, $oid: GitObjectID!) {
+				repository(owner: $owner, name: $repo) {
+					object(oid: $oid) {
+						... on Tree {
+							entries {
+								name
+								oid
+								type
+							}
+						}
+					}
+				}
+			}
+		`;
+
+    const result = await this.graphqlClient<{
+      repository: {
+        object: {
+          entries: Array<{
+            name: string;
+            oid: string;
+            type: string;
+          }>;
+        } | null;
+      };
+    }>(query, {
+      owner: this.owner,
+      repo: this.repo,
+      oid,
+    });
+
+    const tree = result.repository.object;
+    if (!tree || !tree.entries) {
+      return null;
+    }
+
+    return tree.entries.reduce(
+      (acc, entry) => {
+        acc[entry.name] = {
+          type: entry.type.toLowerCase() === "tree" ? "tree" : "blob",
+          oid: entry.oid,
+        };
+        return acc;
+      },
+      {} as Record<string, { type: "blob" | "tree"; oid: string }>,
+    );
+  }
+
+  async fetchBlobs(args: {
+    oids: string[];
+  }): Promise<{ oid: string; content: string }[]> {
+    if (args.oids.length === 0) {
+      return [];
+    }
+
+    const blobPromises = args.oids.map(async (oid) => {
+      const response = await this.octokit.git.getBlob({
+        owner: this.owner,
+        repo: this.repo,
+        file_sha: oid,
+      });
+
+      const content =
+        response.data.encoding === "base64"
+          ? Buffer.from(response.data.content, "base64").toString("utf-8")
+          : response.data.content;
+
+      return { oid, content };
+    });
+
+    return Promise.all(blobPromises);
+  }
+
+  async fetchBlobRaw(args: { oid: string }): Promise<Buffer | null> {
+    try {
+      const response = await this.octokit.git.getBlob({
+        owner: this.owner,
+        repo: this.repo,
+        file_sha: args.oid,
+      });
+      return Buffer.from(response.data.content, "base64");
+    } catch {
+      return null;
+    }
+  }
+
+  async createBlob(args: { content: Uint8Array }): Promise<{ oid: string }> {
+    const response = await this.octokit.git.createBlob({
+      owner: this.owner,
+      repo: this.repo,
+      content: Buffer.from(args.content).toString("base64"),
+      encoding: "base64",
+    });
+    return { oid: response.data.sha };
+  }
+
+  async push(args: {
+    ref: string;
+    commits: Commit[];
+    blobs: { oid: string; content: string }[];
+    trees: {
+      oid: string;
+      entries: Record<string, { type: "blob" | "tree"; oid: string }>;
+    }[];
+  }): Promise<PushResult> {
+    const { ref, commits, blobs, trees } = args;
+
+    // 1. Create blobs
+    const blobOidMap = new Map<string, string>();
+    for (const blob of blobs) {
+      const response = await this.octokit.git.createBlob({
+        owner: this.owner,
+        repo: this.repo,
+        content: Buffer.from(blob.content).toString("base64"),
+        encoding: "base64",
+      });
+      if (response.data.sha !== blob.oid) {
+        throw new Error(
+          `Blob OID mismatch: expected ${blob.oid}, GitHub returned ${response.data.sha}`,
+        );
+      }
+      blobOidMap.set(blob.oid, response.data.sha);
+    }
+
+    // 2. Create trees (leaf-first so children exist before parents reference them)
+    const treeOidMap = new Map<string, string>();
+    for (const tree of trees) {
+      const treeItems = Object.entries(tree.entries).map(([name, entry]) => ({
+        path: name,
+        mode: entry.type === "tree" ? ("040000" as const) : ("100644" as const),
+        type: entry.type as "blob" | "tree",
+        sha:
+          treeOidMap.get(entry.oid) ?? blobOidMap.get(entry.oid) ?? entry.oid,
+      }));
+
+      const response = await this.octokit.git.createTree({
+        owner: this.owner,
+        repo: this.repo,
+        tree: treeItems,
+      });
+      if (response.data.sha !== tree.oid) {
+        const localEntries = treeItems
+          .map((e) => `    ${e.mode} ${e.type} ${e.sha}\t${e.path}`)
+          .join("\n");
+        const ghEntries = (response.data.tree ?? [])
+          .map((e) => `    ${e.mode} ${e.type} ${e.sha}\t${e.path}`)
+          .join("\n");
+        throw new Error(
+          `Tree OID mismatch: expected ${tree.oid}, GitHub returned ${response.data.sha}\n` +
+            `  local entries:\n${localEntries}\n` +
+            `  github entries:\n${ghEntries}`,
+        );
+      }
+      treeOidMap.set(tree.oid, response.data.sha);
+    }
+
+    // 3. Create commits (oldest-first, mapping parent OIDs to GitHub's)
+    const commitOidMap = new Map<string, string>();
+    let lastCommitResponse: { sha: string; tree: { sha: string } } | null =
+      null;
+
+    for (const commit of commits) {
+      const parents = [commit.parent, commit.secondParent]
+        .filter((p): p is string => p !== null)
+        .map((p) => commitOidMap.get(p) ?? p);
+
+      const rootTreeSha = treeOidMap.get(commit.treeOid) ?? commit.treeOid;
+
+      const commitResponse = await this.octokit.git.createCommit({
+        owner: this.owner,
+        repo: this.repo,
+        message: commit.message,
+        tree: rootTreeSha,
+        parents,
+        author: {
+          name: commit.author.name,
+          email: commit.author.email,
+          date: new Date(commit.author.timestamp * 1000).toISOString(),
+        },
+        committer: commit.committer
+          ? {
+              name: commit.committer.name,
+              email: commit.committer.email,
+              date: new Date(commit.committer.timestamp * 1000).toISOString(),
+            }
+          : undefined,
+      });
+
+      const remoteSha = commitResponse.data.sha;
+      if (remoteSha !== commit.oid) {
+        const ghCommit = commitResponse.data;
+        console.warn(
+          "Commit OID mismatch — using GitHub's\n" +
+            `  local:  ${commit.oid}\n` +
+            `  github: ${remoteSha}\n` +
+            "  diff:\n" +
+            `    tree:      local=${commit.treeOid} github=${ghCommit.tree.sha}\n` +
+            `    message:   local=${JSON.stringify(commit.message)} github=${JSON.stringify(ghCommit.message)}\n` +
+            `    parents:   local=${JSON.stringify([commit.parent, commit.secondParent].filter(Boolean))} github=${JSON.stringify(ghCommit.parents.map((p) => p.sha))}\n` +
+            `    author:    local=${commit.author.name} <${commit.author.email}> ${commit.author.timestamp} github=${ghCommit.author?.name} <${ghCommit.author?.email}> ${ghCommit.author?.date}\n` +
+            `    committer: local=${commit.committer?.name} <${commit.committer?.email}> ${commit.committer?.timestamp} github=${ghCommit.committer?.name} <${ghCommit.committer?.email}> ${ghCommit.committer?.date}`,
+        );
+      }
+
+      commitOidMap.set(commit.oid, remoteSha);
+      lastCommitResponse = {
+        sha: remoteSha,
+        tree: { sha: commitResponse.data.tree.sha },
+      };
+    }
+
+    if (!lastCommitResponse) {
+      throw new Error("No commits to push");
+    }
+
+    // 4. Update ref (or create if it doesn't exist yet)
+    try {
+      await this.octokit.git.updateRef({
+        owner: this.owner,
+        repo: this.repo,
+        ref: `heads/${ref}`,
+        sha: lastCommitResponse.sha,
+      });
+    } catch {
+      try {
+        await this.octokit.git.createRef({
+          owner: this.owner,
+          repo: this.repo,
+          ref: `refs/heads/${ref}`,
+          sha: lastCommitResponse.sha,
+        });
+      } catch (createError) {
+        throw new Error(
+          `Failed to update/create ref heads/${ref} to ${lastCommitResponse.sha}: ${createError instanceof Error ? createError.message : String(createError)}`,
+        );
+      }
+    }
+
+    return {
+      commitOidMap,
+      commitOid: lastCommitResponse.sha,
+      treeOid: lastCommitResponse.tree.sha,
+    };
+  }
+
+  async createPr(args: CreatePrArgs): Promise<PrResult> {
+    const response = await this.octokit.pulls.create({
+      owner: this.owner,
+      repo: this.repo,
+      head: args.head,
+      base: args.base,
+      title: args.title,
+      body: args.body,
+    });
+
+    const labels = args.labels ?? [];
+    if (labels.length > 0) {
+      await this.octokit.issues.addLabels({
+        owner: this.owner,
+        repo: this.repo,
+        issue_number: response.data.number,
+        labels,
+      });
+    }
+
+    return {
+      number: response.data.number,
+      url: response.data.html_url,
+      title: response.data.title,
+      body: response.data.body ?? "",
+      labels,
+    };
+  }
+
+  async updatePr(args: UpdatePrArgs): Promise<PrResult> {
+    const response = await this.octokit.pulls.update({
+      owner: this.owner,
+      repo: this.repo,
+      pull_number: args.pr,
+      ...(args.title !== undefined && { title: args.title }),
+      ...(args.body !== undefined && { body: args.body }),
+    });
+
+    if (args.labels !== undefined) {
+      await this.octokit.issues.setLabels({
+        owner: this.owner,
+        repo: this.repo,
+        issue_number: args.pr,
+        labels: args.labels,
+      });
+    }
+
+    return {
+      number: response.data.number,
+      url: response.data.html_url,
+      title: response.data.title,
+      body: response.data.body ?? "",
+      labels:
+        args.labels ??
+        response.data.labels.map((l) =>
+          typeof l === "string" ? l : (l.name ?? ""),
+        ),
+    };
+  }
+
+  async findPr(args: { head: string; base: string }): Promise<PrResult | null> {
+    const response = await this.octokit.pulls.list({
+      owner: this.owner,
+      repo: this.repo,
+      head: `${this.owner}:${args.head}`,
+      base: args.base,
+      state: "open",
+      per_page: 1,
+    });
+
+    const pr = response.data[0];
+    if (!pr) return null;
+
+    return {
+      number: pr.number,
+      url: pr.html_url,
+      title: pr.title,
+      body: pr.body ?? "",
+      labels: pr.labels.map((l) =>
+        typeof l === "string" ? l : (l.name ?? ""),
+      ),
+    };
+  }
+
+  async mergePr(args: MergePrArgs): Promise<MergePrResult> {
+    const response = await this.octokit.pulls.merge({
+      owner: this.owner,
+      repo: this.repo,
+      pull_number: args.pr,
+      merge_method: args.method ?? "merge",
+    });
+
+    return {
+      commitOid: response.data.sha,
+      merged: response.data.merged,
+    };
+  }
+
+  async createPrComment(args: { pr: number; body: string }): Promise<void> {
+    await this.octokit.issues.createComment({
+      owner: this.owner,
+      repo: this.repo,
+      issue_number: args.pr,
+      body: args.body,
+    });
+  }
+}

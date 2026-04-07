@@ -1,0 +1,49 @@
+# See https://help.github.com/articles/ignoring-files/ for more about ignoring files.
+
+# Dependencies
+node_modules
+.pnp
+.pnp.js
+
+# Local env files
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+
+# Testing
+coverage
+
+# Turbo
+.turbo
+
+# Vercel
+.vercel
+
+# Build Outputs
+.next/
+out/
+build
+dist
+
+
+# Debug
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Misc
+.DS_Store
+*.pem
+
+# Drizzle
+# The auto generated files from drizzle migrations, we don't want to commit these because they we don't plan to expose them as part of the project
+drizzle
+.env*.local
+
+tr33.db
+.tr33-cache/
+# Legacy cache dir name (safe to delete locally)
+.tr33-cache/
+tsconfig.tsbuildinfo
